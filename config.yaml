@@ -1,0 +1,31 @@
+# GitHub Copilot 캡처 Proxy 설정
+
+# 캡처 대상 호스트 (Copilot allowlist 기준). suffix 매칭(endswith)으로 평가.
+allowlist_hosts:
+  - api.githubcopilot.com
+  - copilot-proxy.githubusercontent.com
+  - .githubcopilot.com          # *.githubcopilot.com
+  - proxy.enterprise.githubcopilot.com
+
+storage:
+  # SQLite DB 파일 경로 (프로젝트 루트 기준 상대경로 허용)
+  db_path: data/captures.db
+  # 보존 기간(일). 이 기간이 지난 캡처는 purge 시 삭제. 0이면 무제한.
+  retention_days: 30
+
+masking:
+  # true면 저장 전 민감정보를 마스킹. false면 원문 저장(주의: 보안 검토 필요).
+  enabled: true
+  # 마스킹 후에도 원문 길이 추정을 위해 토큰은 마스킹 전 텍스트로 산정.
+
+capture:
+  # 응답 본문 캡처 여부. 스트리밍(SSE) 응답도 누적 캡처.
+  store_response: true
+  # 본문 1건당 최대 저장 바이트 (초과 시 절단). 0이면 무제한.
+  max_body_bytes: 1048576
+
+dashboard:
+  # 실시간 모니터링 웹 대시보드. 애드온 프로세스 안에서 함께 구동.
+  enabled: true
+  host: 127.0.0.1
+  port: 10802
