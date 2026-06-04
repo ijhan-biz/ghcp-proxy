@@ -25,6 +25,7 @@
 | `config.yaml` | allowlist 도메인·마스킹 토글·보존일수 |
 | `docs/ghcp-proxy-guide.html` | 상세 설계·내부 동작·사용 가이드 HTML |
 | `scripts/run_proxy.sh` | 프록시 실행 헬퍼 |
+| `scripts/install_launchd.sh` | 로그인 시 자동시작 등록(LaunchAgent) / `uninstall_launchd.sh` 로 해제 |
 | `scripts/smoke_live.py` | 실제 mitmdump 프로세스 기반 라이브 스모크 테스트 |
 
 ## 빠른 시작
@@ -35,19 +36,26 @@
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-# (선택) 정확한 토큰 산정: pip install tiktoken
+# tiktoken 은 requirements.txt 에 포함되어 기본 설치됩니다.
 ```
 
-### 2. 프록시 실행 (CA 자동 생성)
+### 2. 프록시 실행
 
 ```bash
-./scripts/run_proxy.sh            # mitmdump, 포트 10801
+./scripts/run_proxy.sh            # macOS: 시스템 프록시 자동 적용 + mitmdump(10801)
 # 또는 브라우저 UI:
 ./scripts/run_proxy.sh --web      # mitmweb
 ```
 
-최초 실행 시 mitmproxy 가 `.mitmproxy/` 에 사내 CA(`mitmproxy-ca-cert.pem`)를
-자동 생성합니다. 운영에서는 이 자리에 **사내 CA** 를 배치합니다.
+macOS 에서는 `run_proxy.sh` 가 기본적으로 `setup_mac_capture.sh` 를 자동 호출해
+시스템 프록시를 적용합니다. 최초 1회 CA 파일이 아직 없다면 아래처럼 자동 적용을
+건너뛰고 CA 를 먼저 생성한 뒤 기본 실행을 사용하세요.
+
+```bash
+./scripts/run_proxy.sh --no-system-proxy
+```
+
+운영에서는 `.mitmproxy/mitmproxy-ca-cert.pem` 자리에 **사내 CA** 를 배치합니다.
 
 ### 2-1. 실시간 대시보드
 
@@ -94,8 +102,14 @@ allowlist 에는 `api.githubcopilot.com`, `copilot-proxy.githubusercontent.com`,
 이 Mac 의 **모든 앱 트래픽**을 캡처 프록시로 라우팅하려면(저장은 Copilot 만):
 
 ```bash
-./scripts/run_proxy.sh &              # 프록시+대시보드(10801/10802) 기동
-./scripts/setup_mac_capture.sh        # CA 신뢰 + 시스템 프록시 설정 (sudo 암호 필요)
+./scripts/run_proxy.sh                # setup_mac_capture 자동 적용 + 프록시/대시보드 기동
+```
+
+수동 제어가 필요하면 아래처럼 분리할 수 있습니다.
+
+```bash
+./scripts/run_proxy.sh --no-system-proxy
+./scripts/setup_mac_capture.sh
 ```
 
 `setup_mac_capture.sh` 는 기본 네트워크 서비스를 자동 탐지해
@@ -117,6 +131,33 @@ source scripts/env_capture.sh         # 현재 셸에 HTTP(S)_PROXY + CA env 적
 > 막힐 수 있으며, 그 경우 teardown 으로 즉시 복구하세요.
 
 
+### 3-2. 로그인 시 자동 시작 (macOS, LaunchAgent)
+
+매번 수동 실행 없이 **로그인할 때 프록시가 자동으로 뜨게** 하려면:
+
+```bash
+./scripts/setup_mac_capture.sh        # 최초 1회: 시스템 프록시 + CA 신뢰(재부팅 후 유지)
+./scripts/install_launchd.sh          # LaunchAgent 2개 등록(프록시 자동시작 + GUI env)
+```
+
+`install_launchd.sh` 는 sudo 없이 `~/Library/LaunchAgents` 에 두 에이전트를 등록합니다.
+
+- `biz.ijhan.ghcp-proxy` : `mitmdump`(10801)를 로그인 시 자동 실행하고, 죽으면 자동 재시작.
+- `biz.ijhan.ghcp-proxy.env` : 로그인 시 GUI 세션에 `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS`
+  를 주입(`launchctl setenv`)해, 시스템 프록시를 우회하는 **VS Code/Copilot** 도 캡처되게 함.
+
+> VS Code 캡처는 env 상속이 필요합니다. 설치 직후에는 이미 떠있는 VS Code 를 한 번
+> **완전 종료(Cmd+Q) 후 재실행**해야 env 가 적용됩니다(Dock 으로 다시 열면 됩니다).
+
+로그: `logs/proxy.{out,err}.log`, `logs/setenv.{out,err}.log`
+
+해제:
+
+```bash
+./scripts/uninstall_launchd.sh        # LaunchAgent 제거 + GUI env 해제
+```
+
+
 ### 4. 캡처 데이터 조회
 
 ```bash
@@ -130,7 +171,7 @@ python -m ghcp_proxy.cli purge                 # 보존기간 지난 캡처 삭�
 
 `tokens`/`projects` 집계는 기본적으로 `model='unknown'` 인 비추론 보조 트래픽
 (`/models`, `/telemetry`, `/_ping`, `/agents/sessions` 등)을 제외하며, `--all` 로 전체를 포함합니다.
-각 명령에 `--json` 을 붙이면 SIEM/DLP 연계용 JSON 으로 출력됩니다.
+지원 명령(`recent`/`tokens`/`projects`)에 `--json` 을 붙이면 SIEM/DLP 연계용 JSON 으로 출력됩니다.
 
 ## 설정 (`config.yaml`)
 
@@ -139,6 +180,7 @@ python -m ghcp_proxy.cli purge                 # 보존기간 지난 캡처 삭�
 - `storage.db_path` / `storage.retention_days`: SQLite 경로·보존일수.
 - `masking.enabled`: 저장 전 민감정보 마스킹 on/off.
 - `capture.store_response` / `capture.max_body_bytes`: 응답 저장 여부·본문 크기 상한.
+- `capture.only_inference`: `true`면 모델이 식별된 추론 호출만 저장(`unknown` 보조 트래픽 제외).
 
 `GHCP_CONFIG=/path/to/config.yaml` 환경변수로 다른 설정 파일을 지정할 수 있습니다.
 
@@ -177,8 +219,11 @@ python -m ghcp_proxy.cli tokens            # 개발자/모델별 토큰 집계(�
 python -m ghcp_proxy.cli tokens --all      # /models, /telemetry, /_ping, /agents/sessions 등 포함
 python -m ghcp_proxy.cli show <id>         # 단건 상세 (마스킹된 payload)
 python -m ghcp_proxy.cli purge             # 보존기간 초과 레코드 정리
-# 모든 서브커맨드 --json 지원
+# --json: recent/tokens/projects 에서 지원
 ```
+
+`--json` 은 `recent`/`tokens`/`projects` 에서 지원합니다.
+`show` 는 기본 출력이 JSON 이고, `purge` 는 텍스트 요약을 출력합니다.
 
 `tokens`/`projects` 는 기본적으로 추론 호출만 집계해 `/models`, `/telemetry`, `/_ping`,
 `/agents/sessions` 같은 `model='unknown'` 보조 트래픽을 제외합니다. 운영 보조 트래픽까지
@@ -187,7 +232,7 @@ python -m ghcp_proxy.cli purge             # 보존기간 초과 레코드 정�
 ## 테스트
 
 ```bash
-pytest -q                      # 단위/통합 테스트 (32 cases)
+pytest -q                      # 단위/통합 테스트 (현재 37 tests)
 python scripts/smoke_live.py   # 실제 mitmdump 프로세스 라이브 캡처 검증
 ```
 

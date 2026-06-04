@@ -15,3 +15,7 @@ certs/
 
 # mitmproxy 기본 CA 디렉터리(로컬 생성)
 .mitmproxy/
+
+# launchd 로그
+logs/
+logs_proxy.out
