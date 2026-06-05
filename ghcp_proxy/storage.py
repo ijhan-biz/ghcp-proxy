@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS captures (
     request_tokens   INTEGER,
     response_tokens  INTEGER,
     total_tokens     INTEGER,
+    cache_read_tokens  INTEGER,
+    cache_write_tokens INTEGER,
     token_source     TEXT,
     masked           INTEGER DEFAULT 0,
     mask_hits        INTEGER DEFAULT 0,
@@ -47,6 +49,8 @@ _EXTRA_COLUMNS = {
     "client_process": "TEXT",
     "project_dir": "TEXT",
     "project_source": "TEXT",
+    "cache_read_tokens": "INTEGER",
+    "cache_write_tokens": "INTEGER",
 }
 
 
@@ -63,6 +67,8 @@ class CaptureRecord:
     request_tokens: Optional[int] = None
     response_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    cache_read_tokens: Optional[int] = None
+    cache_write_tokens: Optional[int] = None
     token_source: Optional[str] = None
     masked: int = 0
     mask_hits: int = 0
@@ -142,6 +148,8 @@ class Storage:
             "SELECT developer, model, COUNT(*) AS calls,"
             " COALESCE(SUM(request_tokens),0) AS req_tokens,"
             " COALESCE(SUM(response_tokens),0) AS resp_tokens,"
+            " COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,"
+            " COALESCE(SUM(cache_write_tokens),0) AS cache_write_tokens,"
             " COALESCE(SUM(total_tokens),0) AS total_tokens"
             " FROM captures" + _inference_where(inference_only) +
             " GROUP BY developer, model ORDER BY total_tokens DESC"

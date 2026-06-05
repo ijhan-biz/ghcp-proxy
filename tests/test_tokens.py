@@ -60,3 +60,35 @@ def test_usage_from_sse_stream():
 
 def test_usage_absent():
     assert tokens.usage_from_response('{"choices": []}') is None
+
+
+def test_usage_openai_cached_tokens():
+    body = (
+        '{"usage": {"prompt_tokens": 100, "completion_tokens": 20,'
+        ' "total_tokens": 120, "prompt_tokens_details": {"cached_tokens": 80}}}'
+    )
+    usage = tokens.usage_from_response(body)
+    assert usage["prompt_tokens"] == 100
+    assert usage["total_tokens"] == 120
+    assert usage["cache_read_tokens"] == 80
+    assert usage["cache_write_tokens"] == 0
+
+
+def test_usage_anthropic_sse_merges_cache_and_output():
+    # message_start 에 입력/캐시, message_delta 에 최종 출력이 나뉘어 온다.
+    body = (
+        'event: message_start\n'
+        'data: {"type":"message_start","message":{"model":"claude-opus-4-8",'
+        '"usage":{"input_tokens":2,"cache_read_input_tokens":52308,'
+        '"cache_creation_input_tokens":1778,"output_tokens":2}}}\n'
+        'event: message_delta\n'
+        'data: {"type":"message_delta","usage":{"output_tokens":588}}\n'
+    )
+    usage = tokens.usage_from_response(body)
+    assert usage is not None
+    # prompt = input + cache_read + cache_write
+    assert usage["prompt_tokens"] == 2 + 52308 + 1778
+    assert usage["completion_tokens"] == 588
+    assert usage["cache_read_tokens"] == 52308
+    assert usage["cache_write_tokens"] == 1778
+    assert usage["total_tokens"] == usage["prompt_tokens"] + 588

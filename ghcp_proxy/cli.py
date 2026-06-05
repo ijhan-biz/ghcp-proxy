@@ -69,11 +69,17 @@ def cmd_tokens(args: argparse.Namespace) -> int:
     if not rows:
         print("(캡처 없음)")
         return 0
-    print(f"{'DEV':<18} {'MODEL':<22} {'CALLS':>6} {'REQ':>8} {'RESP':>8} {'TOTAL':>8}")
+    print(f"{'DEV':<18} {'MODEL':<22} {'CALLS':>6} {'REQ':>8} {'RESP':>8} "
+          f"{'CACHE_RD':>9} {'CACHE_WR':>9} {'HIT%':>5} {'TOTAL':>8}")
     for r in rows:
+        req = r['req_tokens'] or 0
+        cache_rd = r.get('cache_read_tokens') or 0
+        hit = f"{(100 * cache_rd / req):.0f}" if req else "-"
         print(
             f"{str(r['developer'])[:18]:<18} {str(r['model'])[:22]:<22} "
-            f"{r['calls']:>6} {r['req_tokens']:>8} {r['resp_tokens']:>8} {r['total_tokens']:>8}"
+            f"{r['calls']:>6} {req:>8} {r['resp_tokens']:>8} "
+            f"{cache_rd:>9} {r.get('cache_write_tokens') or 0:>9} {hit:>5} "
+            f"{r['total_tokens']:>8}"
         )
     return 0
 

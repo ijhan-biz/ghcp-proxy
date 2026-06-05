@@ -195,7 +195,7 @@ footer {
           <span class="badge">mitmproxy <b>12.2.3</b></span>
           <span class="badge">Python <b>3.13</b></span>
           <span class="badge">저장소 <b>SQLite</b></span>
-          <span class="badge">테스트 <b>32 cases</b></span>
+          <span class="badge">테스트 <b>37 tests</b></span>
         </div>
       </div>
 
@@ -465,6 +465,7 @@ masking:
 capture:
   store_response: true
   max_body_bytes: 1048576
+  only_inference: true
 
 dashboard:
   enabled: true
@@ -1092,14 +1093,11 @@ ps.set_defaults(func=cmd_show)</code></pre>
       <!-- ===== 사용 · 운영 ===== -->
 <section id="use-install">
   <h2>설치</h2>
-  <p>이 PoC는 Python 기반 mitmproxy 애드온으로 동작한다. 현재 검증 환경은 Python 3.13.9, mitmproxy 12.2.3이며, 저장소의 <code>requirements.txt</code>는 <code>mitmproxy&gt;=11,&lt;13</code>, <code>PyYAML&gt;=6</code>, 테스트용 <code>pytest&gt;=8</code>을 요구한다.</p>
+  <p>이 PoC는 Python 기반 mitmproxy 애드온으로 동작한다. 현재 검증 환경은 Python 3.13.9, mitmproxy 12.2.3이며, 저장소의 <code>requirements.txt</code>는 <code>mitmproxy&gt;=11,&lt;13</code>, <code>PyYAML&gt;=6</code>, <code>tiktoken&gt;=0.7</code>, 테스트용 <code>pytest&gt;=8</code>을 요구한다.</p>
   <pre><code class="language-bash">cd /Users/hacbook/ms/workspace/ghcp-proxy
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-
-# 선택: 더 정확한 토큰 산정. 미설치 시 휴리스틱으로 자동 폴백한다.
-pip install tiktoken
 
 # 설치 버전 확인 예시
 python --version
@@ -1109,17 +1107,20 @@ mitmdump --version</code></pre>
     <tbody>
       <tr><td>Python</td><td>검증 환경: 3.13.x</td></tr>
       <tr><td>mitmproxy</td><td>검증 환경: 12.2.3, 요구 범위: 11 이상 13 미만</td></tr>
-      <tr><td>tiktoken</td><td>선택 의존성. 설치되면 토큰 산정 정확도를 높이고, 없으면 약 4 chars/token 휴리스틱을 사용한다.</td></tr>
+      <tr><td>tiktoken</td><td>requirements에 포함된 기본 의존성. 런타임에서 import 실패 시에는 약 4 chars/token 휴리스틱으로 폴백한다.</td></tr>
     </tbody>
   </table>
-  <div class="note">최초 프록시 실행 시 mitmproxy가 <code>.mitmproxy/mitmproxy-ca-cert.pem</code> CA 파일을 생성한다. 운영 환경에서는 이 자리에 통제된 사내 CA를 배치하고 배포 절차를 별도로 관리해야 한다.</div>
+  <div class="note">mitmproxy는 실행 시 <code>.mitmproxy/mitmproxy-ca-cert.pem</code> CA 파일을 생성한다. macOS에서 <code>run_proxy.sh</code> 기본 경로는 시스템 프록시 자동 적용을 먼저 시도하므로, 최초 1회는 <code>./scripts/run_proxy.sh --no-system-proxy</code>로 CA를 먼저 만든 뒤 기본 경로를 사용하면 안전하다. 운영 환경에서는 이 자리에 통제된 사내 CA를 배치하고 배포 절차를 별도로 관리해야 한다.</div>
 </section>
 
 <section id="use-run">
   <h2>프록시 실행</h2>
-  <p>기본 실행은 저장소의 헬퍼 스크립트를 사용한다. 스크립트는 프로젝트 루트로 이동한 뒤 <code>.venv</code>가 있으면 활성화하고, 기본 포트 <code>10801</code>에서 <code>addons/capture.py</code> 애드온을 붙인 <code>mitmdump</code>를 실행한다.</p>
+  <p>기본 실행은 저장소의 헬퍼 스크립트를 사용한다. 스크립트는 프로젝트 루트로 이동한 뒤 <code>.venv</code>가 있으면 활성화하고, 기본 포트 <code>10801</code>에서 <code>addons/capture.py</code> 애드온을 붙인 <code>mitmdump</code>를 실행한다. macOS에서는 기본적으로 시스템 프록시 자동 적용(내부적으로 <code>setup_mac_capture.sh</code> 호출)을 먼저 수행한다.</p>
   <pre><code class="language-bash">cd /Users/hacbook/ms/workspace/ghcp-proxy
 ./scripts/run_proxy.sh
+
+# 최초 1회 CA 파일 생성/수동 제어가 필요하면 자동 시스템 프록시 적용 없이 실행
+./scripts/run_proxy.sh --no-system-proxy
 
 # 포트 변경
 LISTEN_PORT=9090 ./scripts/run_proxy.sh
@@ -1166,9 +1167,12 @@ flowchart LR
 
 <section id="use-capture">
   <h2>PC 전체 캡처 설정(macOS)</h2>
-  <p><code>scripts/setup_mac_capture.sh</code>는 이 Mac의 시스템 웹/보안 프록시를 캡처 프록시로 연결한다. 스크립트는 사용자가 직접 실행해야 하며, System 키체인과 네트워크 설정을 변경하므로 <code>sudo</code> 권한이 필요하다.</p>
+  <p><code>scripts/setup_mac_capture.sh</code>는 이 Mac의 시스템 웹/보안 프록시를 캡처 프록시로 연결한다. 기본 경로에서는 <code>scripts/run_proxy.sh</code>가 macOS에서 이 스크립트를 자동 호출하며, 수동 실행도 가능하다. System 키체인과 네트워크 설정을 변경하므로 <code>sudo</code> 권한이 필요하다.</p>
   <pre><code class="language-bash">cd /Users/hacbook/ms/workspace/ghcp-proxy
-./scripts/run_proxy.sh &amp;
+./scripts/run_proxy.sh
+
+# 수동으로 분리해서 제어하려면
+./scripts/run_proxy.sh --no-system-proxy
 ./scripts/setup_mac_capture.sh</code></pre>
   <h3>스크립트가 수행하는 작업</h3>
   <ol>
@@ -1290,7 +1294,7 @@ open http://127.0.0.1:10802</code></pre>
 
 <section id="use-testing">
   <h2>테스트</h2>
-  <p>저장소에는 단위/통합 테스트와 실제 <code>mitmdump</code> 프로세스를 사용하는 라이브 스모크 테스트가 포함되어 있다. 현재 테스트 수집 결과는 32 cases다.</p>
+  <p>저장소에는 단위/통합 테스트와 실제 <code>mitmdump</code> 프로세스를 사용하는 라이브 스모크 테스트가 포함되어 있다. 현재 테스트 수집 결과는 37 tests다.</p>
   <pre><code class="language-bash">cd /Users/hacbook/ms/workspace/ghcp-proxy
 source .venv/bin/activate
 pytest -q

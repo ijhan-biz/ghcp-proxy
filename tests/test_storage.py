@@ -69,6 +69,20 @@ def test_project_summary_excludes_non_inference(tmp_path):
         assert sum(r["calls"] for r in st.project_summary(inference_only=False)) == 2
 
 
+def test_token_summary_aggregates_cache(tmp_path):
+    with Storage(tmp_path / "t.db") as st:
+        st.insert(_rec(model="claude-opus-4.8", request_tokens=54088,
+                       response_tokens=588, total_tokens=54676,
+                       cache_read_tokens=52308, cache_write_tokens=1778))
+        st.insert(_rec(model="claude-opus-4.8", request_tokens=40411,
+                       response_tokens=277, total_tokens=40688,
+                       cache_read_tokens=40221, cache_write_tokens=6442))
+        summary = st.token_summary()
+        assert len(summary) == 1
+        assert summary[0]["cache_read_tokens"] == 92529
+        assert summary[0]["cache_write_tokens"] == 8220
+
+
 def test_purge_old(tmp_path):
     old_ts = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
     with Storage(tmp_path / "t.db") as st:

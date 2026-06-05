@@ -34,6 +34,7 @@ class MaskingConfig:
 class CaptureConfig:
     store_response: bool = True
     max_body_bytes: int = 1_048_576
+    only_inference: bool = False
 
 
 @dataclass
@@ -103,6 +104,7 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         capture=CaptureConfig(
             store_response=bool(capture_raw.get("store_response", True)),
             max_body_bytes=int(capture_raw.get("max_body_bytes", 1_048_576)),
+            only_inference=bool(capture_raw.get("only_inference", False)),
         ),
         dashboard=DashboardConfig(
             enabled=_env_bool("GHCP_DASHBOARD", bool(dashboard_raw.get("enabled", True))),

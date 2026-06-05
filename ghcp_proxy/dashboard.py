@@ -158,6 +158,13 @@ class DashboardServer:
             def log_message(self, *a):  # 조용히
                 pass
 
+            def handle(self):
+                try:
+                    super().handle()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    # 브라우저/탭 종료 시 소켓이 먼저 닫히면 간헐적으로 발생할 수 있다.
+                    pass
+
             def _send(self, code, body: bytes, ctype="application/json"):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
