@@ -61,7 +61,7 @@ def _make_addon(tmp_path):
     addon.storage = Storage(tmp_path / "addon.db")
 
     class _StubAttr:
-        def attribute(self, sport, body=""):
+        def attribute(self, sport, body="", path=""):
             return {
                 "client_pid": sport,
                 "client_process": "stub-proc",
@@ -93,6 +93,31 @@ def test_allowlisted_flow_is_captured(tmp_path):
     # 마스킹 적용 확인
     assert "ghp_" not in r["request_body"]
     assert r["mask_hits"] >= 1
+    addon.storage.close()
+
+
+def test_anthropic_flow_captures_cache_tokens(tmp_path):
+    addon = _make_addon(tmp_path)
+    req = _Req(
+        "api.githubcopilot.com",
+        b'{"model":"claude-opus-4.8","messages":[{"role":"user","content":"hi"}]}',
+        headers={"X-Copilot-User": "bob"},
+    )
+    resp = _Resp(
+        b'event: message_start\n'
+        b'data: {"type":"message_start","message":{"model":"claude-opus-4-8",'
+        b'"usage":{"input_tokens":2,"cache_read_input_tokens":52308,'
+        b'"cache_creation_input_tokens":1778,"output_tokens":2}}}\n'
+        b'event: message_delta\n'
+        b'data: {"type":"message_delta","usage":{"output_tokens":588}}\n'
+    )
+    addon.response(_Flow(req, resp))
+    r = addon.storage.get(addon.storage.recent()[0]["id"])
+    assert r["token_source"] == "api_usage"
+    assert r["cache_read_tokens"] == 52308
+    assert r["cache_write_tokens"] == 1778
+    assert r["response_tokens"] == 588
+    assert r["total_tokens"] == 2 + 52308 + 1778 + 588
     addon.storage.close()
 
 

@@ -5,7 +5,9 @@
 프로젝트 폴더 결정 우선순위:
   1) 소켓 PID 의 cwd 가 실제 프로젝트 폴더면 그대로 (터미널/CLI 발신 → 정확)
   2) VS Code 등 공유 헬퍼면, 열려 있는 워크스페이스(확장호스트 cwd)로 추론
-  3) 요청 본문에 든 파일 경로에서 추론
+     - 다중 워크스페이스는 요청 신호로 좁힘: 본문 <workspace_info> 폴더 →
+       요청 URL 의 repo 이름(repo_nwo/custom-agents/jobs) → 본문 파일 경로
+  3) 요청 본문/URL 에 든 경로·repo 에서 추론
 lsof 호출 비용을 줄이기 위해 짧은 TTL 캐시를 사용한다(mitmproxy 이벤트 루프 블로킹 최소화).
 """
 from __future__ import annotations
@@ -16,6 +18,7 @@ import subprocess
 import threading
 import time
 from typing import Optional
+from urllib.parse import parse_qs, unquote, urlsplit
 
 _SELF_PID = os.getpid()
 _HOME = os.path.expanduser("~")
@@ -26,7 +29,7 @@ _NON_PROJECT = (
     "/private/", "/Applications/",
 )
 
-_PATH_RE = re.compile(r"(?:file://)?(" + re.escape(_HOME) + r"/[^\s\"'`,;:?*]+)")
+_PATH_RE = re.compile(r"(?:file://)?(" + re.escape(_HOME) + r"/[^\s\"'`,;:?*\\]+)")
 
 
 def _run(cmd: list[str], timeout: float = 1.5) -> str:
@@ -181,7 +184,75 @@ class Attributor:
         m = _PATH_RE.search(body)
         return m.group(1) if m else None
 
-    def attribute(self, source_port: Optional[int], request_body: str = "") -> dict:
+    @staticmethod
+    def _workspace_info_folder(body: str) -> Optional[str]:
+        """채팅/완성 본문의 <workspace_info> 블록에서 워크스페이스 폴더를 추출한다.
+
+        예) "<workspace_info> ... folders:\n- /Users/me/ms/workspace/proj ..."
+        폴더가 정확히 하나일 때만 강한 신호로 사용한다(다중 폴더 워크스페이스는 모호).
+        """
+        if not body or "<workspace_info>" not in body:
+            return None
+        start = body.index("<workspace_info>")
+        end = body.find("</workspace_info>", start)
+        section = body[start:end] if end != -1 else body[start:start + 4000]
+        folders = re.findall(r"-\s+(" + re.escape(_HOME) + r"/[^\s\"'`,;:?*\\]+)", section)
+        uniq = list(dict.fromkeys(folders))
+        return uniq[0] if len(uniq) == 1 and is_project_dir(uniq[0]) else None
+
+    @staticmethod
+    def _repo_from_path(path: Optional[str]) -> Optional[str]:
+        """요청 URL 에서 repo 이름(basename)을 추출한다.
+
+        우선순위:
+          1) 쿼리스트링 repo_nwo=owner/repo (URL 인코딩 %2F 포함)
+          2) 경로 세그먼트 /custom-agents/{owner}/{repo} 또는 /jobs/{owner}/{repo}/...
+        """
+        if not path:
+            return None
+        parts = urlsplit(path)
+        nwo = parse_qs(parts.query).get("repo_nwo", [None])[0]
+        if nwo:
+            nwo = unquote(nwo)
+            if "/" in nwo:
+                repo = nwo.rsplit("/", 1)[-1].strip()
+                if repo:
+                    return repo
+        m = re.search(r"/(?:custom-agents|jobs)/[^/]+/([^/?#]+)", parts.path)
+        if m:
+            repo = unquote(m.group(1)).strip()
+            return repo or None
+        return None
+
+    @staticmethod
+    def _match_path_to_ws(path: Optional[str], ws: list[str]) -> Optional[str]:
+        """파일/폴더 경로가 어느 워크스페이스에 속하는지 경계-안전하게 판정.
+
+        가장 긴(=가장 구체적인) 접두 워크스페이스를 반환한다.
+        """
+        if not path:
+            return None
+        best = None
+        for w in ws:
+            if path == w or path.startswith(w.rstrip("/") + os.sep):
+                if best is None or len(w) > len(best):
+                    best = w
+        return best
+
+    @staticmethod
+    def _match_repo_to_ws(repo: Optional[str], ws: list[str]) -> Optional[str]:
+        """repo basename 과 워크스페이스 폴더 basename 을 비교(대소문자 무시).
+
+        유일하게 일치할 때만 반환한다(중복 basename 은 모호 → None).
+        """
+        if not repo:
+            return None
+        target = repo.lower()
+        matches = [w for w in ws if os.path.basename(w.rstrip("/")).lower() == target]
+        return matches[0] if len(matches) == 1 else None
+
+    def attribute(self, source_port: Optional[int], request_body: str = "",
+                  request_path: str = "") -> dict:
         result = {
             "client_pid": None,
             "client_process": None,
@@ -200,7 +271,7 @@ class Attributor:
                 result["project_source"] = "cwd"
                 return result
 
-        # VS Code 등 공유 헬퍼: 열린 워크스페이스로 추론
+        # VS Code 등 공유 헬퍼: 열린 워크스페이스 + 요청 신호로 추론
         proc = (result["client_process"] or "").lower()
         if "code" in proc or "electron" in proc or result["project_dir"] is None:
             ws = self._vscode_workspaces()
@@ -208,19 +279,37 @@ class Attributor:
                 result["project_dir"] = ws[0]
                 result["project_source"] = "vscode-workspace"
                 return result
-            elif len(ws) > 1:
+            if len(ws) > 1:
+                # 1) 본문 <workspace_info> 폴더(강한 신호)
+                wi = self._workspace_info_folder(request_body)
+                m = self._match_path_to_ws(wi, ws) if wi else None
+                if m:
+                    result["project_dir"] = m
+                    result["project_source"] = "workspace-info"
+                    return result
+                # 2) 요청 URL 의 repo 이름
+                m = self._match_repo_to_ws(self._repo_from_path(request_path), ws)
+                if m:
+                    result["project_dir"] = m
+                    result["project_source"] = "repo-url"
+                    return result
+                # 3) 본문의 일반 파일 경로
+                m = self._match_path_to_ws(self._path_from_body(request_body), ws)
+                if m:
+                    result["project_dir"] = m
+                    result["project_source"] = "body-path"
+                    return result
+                # 모호: 열린 워크스페이스 목록을 모두 표기
                 result["project_dir"] = " | ".join(ws)
                 result["project_source"] = "vscode-workspace?"
-                # 본문 경로로 좁힐 수 있으면 덮어쓰기
-                bp = self._path_from_body(request_body)
-                if bp:
-                    for w in ws:
-                        if bp.startswith(w):
-                            result["project_dir"] = w
-                            result["project_source"] = "body-path"
-                            break
                 return result
 
+        # ws 미탐지: 본문 신호로 최선 추론
+        wi = self._workspace_info_folder(request_body)
+        if wi:
+            result["project_dir"] = wi
+            result["project_source"] = "workspace-info"
+            return result
         bp = self._path_from_body(request_body)
         if bp:
             result["project_dir"] = bp

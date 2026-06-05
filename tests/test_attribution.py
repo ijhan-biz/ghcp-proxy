@@ -57,6 +57,87 @@ def test_attribute_vscode_multi_narrowed_by_body(monkeypatch):
     assert res["project_source"] == "body-path"
 
 
+def test_repo_from_path():
+    f = Attributor._repo_from_path
+    assert f("/agents/sessions?page_size=20&repo_nwo=ijhan-biz%2Fghcp-proxy") == "ghcp-proxy"
+    assert f("/agents/swe/custom-agents/ijhan-biz/aibuild-squad?exclude=true") == "aibuild-squad"
+    assert f("/agents/swe/v1/jobs/ijhan-biz/ghcp-proxy/enabled") == "ghcp-proxy"
+    assert f("/agents/sessions/b138a1f4-2896-4c43-9f12-32c2947bc8db") is None
+    assert f("/v1/messages") is None
+    assert f("") is None
+
+
+def test_match_repo_to_ws():
+    ws = [f"{HOME}/ms/workspace/ghcp-proxy", f"{HOME}/ms/workspace/aibuild-squad"]
+    assert Attributor._match_repo_to_ws("ghcp-proxy", ws) == f"{HOME}/ms/workspace/ghcp-proxy"
+    assert Attributor._match_repo_to_ws("GHCP-PROXY", ws) == f"{HOME}/ms/workspace/ghcp-proxy"
+    assert Attributor._match_repo_to_ws("unknown-repo", ws) is None
+    # 중복 basename 은 모호 → None
+    dup = [f"{HOME}/a/proj", f"{HOME}/b/proj"]
+    assert Attributor._match_repo_to_ws("proj", dup) is None
+
+
+def test_match_path_to_ws_boundary():
+    ws = [f"{HOME}/ms/workspace/foo"]
+    # 경계 버그 방지: foo2 는 foo 에 속하지 않음
+    assert Attributor._match_path_to_ws(f"{HOME}/ms/workspace/foo2/x.py", ws) is None
+    assert Attributor._match_path_to_ws(f"{HOME}/ms/workspace/foo/x.py", ws) == f"{HOME}/ms/workspace/foo"
+    # 가장 구체적인(긴) 워크스페이스 우선
+    nested = [f"{HOME}/ms/workspace/foo", f"{HOME}/ms/workspace/foo/sub"]
+    assert Attributor._match_path_to_ws(f"{HOME}/ms/workspace/foo/sub/x.py", nested) == f"{HOME}/ms/workspace/foo/sub"
+
+
+def test_workspace_info_folder():
+    body = (
+        '{"messages":[{"text":"<environment_info>x</environment_info>\\n'
+        '<workspace_info>\\nI am working in a workspace with the following folders:\\n'
+        f'- {HOME}/ms/workspace/ghcp-proxy \\n</workspace_info>"}}]}}'
+    )
+    assert Attributor._workspace_info_folder(body) == f"{HOME}/ms/workspace/ghcp-proxy"
+    # 폴더 다중 → 모호(None)
+    multi = (
+        f'<workspace_info>\\n- {HOME}/ms/workspace/a\\n- {HOME}/ms/workspace/b\\n</workspace_info>'
+    )
+    assert Attributor._workspace_info_folder(multi) is None
+    assert Attributor._workspace_info_folder("no info") is None
+
+
+def test_attribute_multi_narrowed_by_repo_url(monkeypatch):
+    a = Attributor(poll=False)
+    ws = [f"{HOME}/ms/workspace/ghcp-proxy", f"{HOME}/ms/workspace/aibuild-squad"]
+    monkeypatch.setattr(a, "_pid_for_port", lambda sp: (999, "Code Helper"))
+    monkeypatch.setattr(a, "_cwd_for_pid", lambda pid: "/")
+    monkeypatch.setattr(a, "_vscode_workspaces", lambda: ws)
+    res = a.attribute(
+        55560, "", "/agents/sessions?page_size=20&repo_nwo=ijhan-biz%2Faibuild-squad"
+    )
+    assert res["project_dir"] == f"{HOME}/ms/workspace/aibuild-squad"
+    assert res["project_source"] == "repo-url"
+
+
+def test_attribute_multi_narrowed_by_workspace_info(monkeypatch):
+    a = Attributor(poll=False)
+    ws = [f"{HOME}/ms/workspace/ghcp-proxy", f"{HOME}/ms/workspace/aibuild-squad"]
+    monkeypatch.setattr(a, "_pid_for_port", lambda sp: (999, "Code Helper"))
+    monkeypatch.setattr(a, "_cwd_for_pid", lambda pid: "/")
+    monkeypatch.setattr(a, "_vscode_workspaces", lambda: ws)
+    body = f'<workspace_info>\nfolders:\n- {HOME}/ms/workspace/ghcp-proxy \n</workspace_info>'
+    res = a.attribute(55561, body, "/v1/messages")
+    assert res["project_dir"] == f"{HOME}/ms/workspace/ghcp-proxy"
+    assert res["project_source"] == "workspace-info"
+
+
+def test_attribute_multi_ambiguous_when_no_signal(monkeypatch):
+    a = Attributor(poll=False)
+    ws = [f"{HOME}/ms/workspace/a", f"{HOME}/ms/workspace/b"]
+    monkeypatch.setattr(a, "_pid_for_port", lambda sp: (999, "Code Helper"))
+    monkeypatch.setattr(a, "_cwd_for_pid", lambda pid: "/")
+    monkeypatch.setattr(a, "_vscode_workspaces", lambda: ws)
+    res = a.attribute(55562, "", "/models")
+    assert res["project_source"] == "vscode-workspace?"
+    assert " | " in res["project_dir"]
+
+
 def test_attribute_no_port():
     a = Attributor(poll=False)
     res = a.attribute(None, "")

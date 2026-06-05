@@ -92,17 +92,25 @@ class CopilotCapture:
             or tokens.model_from_response(resp_body)
             or "unknown"
         )
+        if self.cfg.capture.only_inference and model == "unknown":
+            return
 
-        # 호출 프로세스/프로젝트 귀속 (마스킹 전 원문 경로로 추론)
-        attr = self.attributor.attribute(self._source_port(flow), req_body)
+        # 호출 프로세스/프로젝트 귀속 (마스킹 전 원문 경로·URL 로 추론)
+        attr = self.attributor.attribute(
+            self._source_port(flow), req_body, flow.request.path
+        )
 
         # 토큰은 마스킹 전 원문 길이 기준으로 산정
         req_tokens = tokens.estimate_tokens(req_body)
         usage = tokens.usage_from_response(resp_body)
+        cache_read_tokens = None
+        cache_write_tokens = None
         if usage and usage.get("total_tokens"):
             resp_tokens = usage.get("completion_tokens")
             total_tokens = usage.get("total_tokens")
             req_tokens = usage.get("prompt_tokens") or req_tokens
+            cache_read_tokens = usage.get("cache_read_tokens")
+            cache_write_tokens = usage.get("cache_write_tokens")
             token_source = "api_usage"
         else:
             resp_tokens = tokens.estimate_tokens(resp_body)
@@ -132,6 +140,8 @@ class CopilotCapture:
             request_tokens=req_tokens,
             response_tokens=resp_tokens,
             total_tokens=total_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
             token_source=token_source,
             masked=masked_flag,
             mask_hits=mask_hits,
